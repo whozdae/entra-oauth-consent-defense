@@ -1,0 +1,58 @@
+// ============================================================================
+// Detection: Illicit OAuth consent grant (consent phishing)
+// Table   : AuditLogs        MITRE ATT&CK: T1528 - Steal Application Access Token
+// ----------------------------------------------------------------------------
+// WHY THIS TABLE: Entra writes every consent + permission-grant action to
+// AuditLogs (Category = "ApplicationManagement"). SigninLogs would show the
+// authentication; AuditLogs shows the durable *grant* - the change we defend.
+// PREREQ: the Entra ID diagnostic setting must export AuditLogs to this workspace.
+// ============================================================================
+
+// ---- STEP 0 - schema discovery (run once, then comment out) ----
+// Never write a hunt from memory. Look at the real columns first.
+// AuditLogs
+// | where TimeGenerated > ago(1d)
+// | where Category == "ApplicationManagement"
+// | getschema
+
+// ---- STEP 1 - the hunt ----
+let lookback = 7d;                                   // explicit, bounded window (always)
+let highRiskScopes = dynamic([                       // the permissions a lure actually wants
+    "Mail.Read","Mail.ReadWrite","Mail.Send","MailboxSettings.ReadWrite",
+    "offline_access","Files.Read.All","Files.ReadWrite.All",
+    "Sites.Read.All","Sites.ReadWrite.All","User.Read.All",
+    "Directory.Read.All","Directory.ReadWrite.All","full_access_as_user"
+]);
+AuditLogs
+| where TimeGenerated > ago(lookback)                              // 1. bound the time
+| where Category == "ApplicationManagement"                        // 2. right slice of the log
+| where OperationName in ("Consent to application",                // 3. the consent operations
+                          "Add delegated permission grant",
+                          "Add app role assignment grant to service principal")
+| extend Actor     = tostring(InitiatedBy.user.userPrincipalName)  // 4a. who consented
+| extend TargetApp = tostring(TargetResources[0].displayName)      // 4b. which app
+| mv-expand mp = TargetResources[0].modifiedProperties             // 5. unpack the detail pairs
+| extend propName = tostring(mp.displayName), propVal = tostring(mp.newValue)
+| summarize                                                        // 6. fold the pairs back per event
+      TimeGenerated  = any(TimeGenerated),
+      Actor          = any(Actor),
+      OperationName  = any(OperationName),
+      Result         = any(Result),
+      IsAdminConsent = anyif(propVal, propName == "ConsentContext.IsAdminConsent"),
+      Permissions    = anyif(propVal, propName has "Permissions" or propName has "ConsentAction")
+    by CorrelationId, TargetApp
+| extend IsAdminConsent = tolower(IsAdminConsent) has "true"       // 7. tenant-wide?  (blast radius)
+| extend HighRiskHit = set_intersect(highRiskScopes,               // 8. did it ask for risky scopes?
+      extract_all(@'([A-Za-z]+\.[A-Za-z\.]+|offline_access)', Permissions))
+| extend Verdict = case(                                           // 9. triage by blast radius + scope
+      IsAdminConsent and array_length(HighRiskHit) > 0, "SUSPICIOUS - tenant-wide consent to high-risk scopes",
+      IsAdminConsent,                                    "REVIEW - tenant-wide consent",
+      array_length(HighRiskHit) > 0,                     "REVIEW - high-risk scopes (single user)",
+      "INFO")
+| extend Technique = "T1528"
+| project TimeGenerated, Actor, OperationName, TargetApp, IsAdminConsent, HighRiskHit, Verdict, Technique, Result
+| sort by TimeGenerated desc
+
+// ---- Turn STEP 1 into an alert: keep only what a SOC should page on ----
+// ... (paste STEP 1 above this, then:)
+// | where Verdict startswith "SUSPICIOUS"

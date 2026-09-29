@@ -1,0 +1,23 @@
+# --- Raw / unsanitized captures: NEVER commit ---
+*.har
+*-RAW.*
+*-raw.*
+*-unsanitized.*
+*-real.*
+*-REAL.*
+*.json.raw
+
+# --- Credential / secret artifacts ---
+CreatedTestUsers.csv
+*-credentials.csv
+*secret*
+*.pfx
+*.key
+
+# --- Local scratch ---
+_publish/
+transcripts/
+*.tmp
+scratch/
+
+# NOTE: sanitized evidence under evidence/*.csv IS committed on purpose.

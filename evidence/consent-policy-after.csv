@@ -1,0 +1,2 @@
+"CapturedUtc","UserConsentPolicies","UserConsentState","UserConsentRisk","AdminWorkflowEnabled","AdminWorkflowReviewers","AdminWorkflowRisk"
+"2026-09-29T04:21:00.2510363Z","","DISABLED - users cannot consent; all consent is routed to admins","LOW","True","1","OK"
